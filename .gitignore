@@ -1,0 +1,12 @@
+# Ignore Data Files
+data/
+*.csv
+*.mbox
+*.zip
+
+# Ignore Python Cache
+__pycache__/
+*.pyc
+
+# Ignore OS generated files
+.DS_Store
