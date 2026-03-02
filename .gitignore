@@ -1,5 +1,6 @@
 # Ignore Data Files
-data/
+data/*
+!data/.gitkeep
 *.csv
 *.mbox
 *.zip
