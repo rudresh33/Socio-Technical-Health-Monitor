@@ -35,6 +35,6 @@ for subject in negative_emails:
 
 word_counts = Counter(all_words)
 
-print("\n🚨 REFINED TOP 15 HUMAN STRESS/URGENCY KEYWORDS 🚨")
+print("\n REFINED TOP 15 HUMAN STRESS/URGENCY KEYWORDS ")
 for word, count in word_counts.most_common(15):
     print(f" - {word}: {count} times")
