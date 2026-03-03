@@ -84,7 +84,7 @@ if __name__ == "__main__":
         
     jira_df.rename(columns=rename_map, inplace=True)
     jira_df['key'] = jira_df['key'].astype(str).str.upper().str.strip()
-    print("✅ JIRA Data Loaded.\n")
+    print("JIRA Data Loaded.\n")
 
     mbox_files = glob.glob(os.path.join(mbox_folder, "*.mbox"))
     print(f"Found {len(mbox_files)} mailing list archives to process.\n")
