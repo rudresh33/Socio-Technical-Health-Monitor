@@ -2,7 +2,7 @@ import requests
 import os
 
 # --- CONFIGURATION ---
-YEAR = 2023  # Sarvadhnya will change this to 2023 and 2024
+YEARS = [2023, 2024]  # Changed to a list so it processes both automatically
 OUTPUT_DIR = "data/mbox_files" # Saves inside the data folder automatically
 
 TARGET_LISTS = [
@@ -39,6 +39,10 @@ def download_list_year(list_name, year):
 if __name__ == "__main__":
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
-    print(f"Starting download for Year: {YEAR}")
-    for lst in TARGET_LISTS:
-        download_list_year(lst, YEAR)
+        
+    print(f"Starting downloads for Years: {YEARS}")
+    
+    # Loop through each year in the YEARS list
+    for year in YEARS:
+        for lst in TARGET_LISTS:
+            download_list_year(lst, year)
