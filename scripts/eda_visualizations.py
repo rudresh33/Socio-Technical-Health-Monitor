@@ -41,4 +41,40 @@ plt.axhline(0, color='red', linestyle=':', linewidth=2)
 plt.savefig(f"{output_dir}/2_stalled_vs_active.png", dpi=300, bbox_inches='tight')
 plt.close()
 
-print(f"✅ Samuel: Visuals saved successfully to the '{output_dir}' folder!")
+# --- PLOT 3: Correlation Heatmap ---
+print("Generating Chart 3: Correlation Heatmap...")
+numeric_cols = ['behavior_score', 'days_to_resolve', 'subject_length', 
+                'priority_numeric', 'is_stalled', 'sentiment_variance', 
+                'email_volume_per_ticket', 'sentiment_trend']
+# Only include columns that actually exist in the dataframe to prevent errors
+existing_cols = [col for col in numeric_cols if col in df.columns]
+corr_df = df[existing_cols].dropna()
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr_df.corr(), annot=True, fmt=".2f", cmap="coolwarm", 
+            linewidths=0.5, square=True)
+plt.title('Feature Correlation Matrix', fontsize=14)
+plt.tight_layout()
+plt.savefig(f"{output_dir}/3_correlation_heatmap.png", dpi=300, bbox_inches='tight')
+plt.close()
+
+# --- PLOT 5: Monthly Sentiment Trend ---
+print("Generating Chart 5: Monthly Sentiment Trend...")
+# Convert to period for grouping, then back to string for plotting
+df['email_month'] = pd.to_datetime(df['email_date'], errors='coerce', utc=True).dt.to_period('M')
+monthly_sentiment = df.groupby('email_month')['behavior_score'].mean().reset_index()
+monthly_sentiment['email_month'] = monthly_sentiment['email_month'].astype(str)
+
+plt.figure(figsize=(14, 5))
+plt.plot(monthly_sentiment['email_month'], monthly_sentiment['behavior_score'], 
+         marker='o', linewidth=2, color='black')
+plt.axhline(0, color='red', linestyle='--', linewidth=1)
+plt.xticks(rotation=45, ha='right')
+plt.title('Average Developer Sentiment by Month (2023-2024)', fontsize=14)
+plt.ylabel('Average Behavior Score')
+plt.xlabel('Month')
+plt.tight_layout()
+plt.savefig(f"{output_dir}/5_monthly_sentiment_trend.png", dpi=300, bbox_inches='tight')
+plt.close()
+
+print(f"✅ Visuals saved successfully to the '{output_dir}' folder!")

@@ -3,7 +3,18 @@ from collections import Counter
 import re
 import os
 
+# --- CONFIGURATION ---
 input_file = "data/enriched_project_dataset.csv"
+
+# Global Stop Words Configuration
+STOP_WORDS = {
+    # Standard English
+    'the', 'a', 'to', 'in', 'of', 'for', 'is', 'on', 're', 'and', 'with', 'from', 'by', 'update',
+    # Hadoop / JIRA standard words
+    'hadoop', 'apache', 'jira', 'created', 'commented', 'resolved', 'patch',
+    # BOT / Automated Build Jargon (The Noise)
+    'report', 'qbt', 'linuxx86_64', 'trunkjdk11', 'trunkjdk8', 'branch33jdk8', 'build', 'failure'
+}
 
 print("Loading Enriched Dataset...")
 df = pd.read_csv(input_file, low_memory=False)
@@ -19,18 +30,7 @@ for subject in negative_emails:
     clean_subject = re.sub(r'[^\w\s]', '', clean_subject).lower()
     
     words = clean_subject.split()
-    
-    # THE FIX: Added bot/automated jargon to the stop words
-    stop_words = {
-        # Standard English
-        'the', 'a', 'to', 'in', 'of', 'for', 'is', 'on', 're', 'and', 'with', 'from', 'by', 'update',
-        # Hadoop / JIRA standard words
-        'hadoop', 'apache', 'jira', 'created', 'commented', 'resolved', 'patch',
-        # BOT / Automated Build Jargon (The Noise)
-        'report', 'qbt', 'linuxx86_64', 'trunkjdk11', 'trunkjdk8', 'branch33jdk8', 'build', 'failure'
-    }
-    
-    words = [w for w in words if w not in stop_words and len(w) > 2]
+    words = [w for w in words if w not in STOP_WORDS and len(w) > 2]
     all_words.extend(words)
 
 word_counts = Counter(all_words)
