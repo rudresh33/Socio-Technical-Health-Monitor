@@ -79,6 +79,42 @@ mbox_folder = 'data/raw/mbox_files'
 output_folder = 'data/interim/parsed_chunks'
 
 
+# --- ISA III FIX: Strip non-author text before sentiment scoring ---
+# PROBLEM: Emails contain quoted replies (> lines), signatures, code blocks,
+# stack traces, and log output. VADER was scoring ALL of this text, meaning
+# a frustrated developer's score would be diluted by polite quoted replies
+# from previous senders, or skewed by technical log output.
+# SOLUTION: Strip everything that isn't the current sender's own words.
+def strip_quoted_text(text):
+    """Remove quoted replies, signatures, code blocks, and stack traces.
+    Returns only the current sender's original text for accurate sentiment scoring."""
+    lines = str(text).split('\n')
+    clean_lines = []
+    in_code_block = False
+    for line in lines:
+        stripped = line.strip()
+        # Skip quoted replies from previous emails
+        if stripped.startswith('>'):
+            continue
+        # Stop at email signature
+        if stripped == '--':
+            break
+        # Skip code blocks (fenced with ```)
+        if stripped.startswith('```'):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+        # Skip Java/Python stack traces
+        if stripped.startswith('at ') and '(' in stripped:
+            continue
+        # Skip build log lines
+        if stripped.startswith('[INFO]') or stripped.startswith('[ERROR]') or stripped.startswith('[WARNING]'):
+            continue
+        clean_lines.append(line)
+    return '\n'.join(clean_lines)
+
+
 def get_sentiment(text):
     """Returns VADER compound sentiment score (-1 to +1)."""
     return sia.polarity_scores(text)['compound']
@@ -116,12 +152,15 @@ def parse_mbox_robust(mbox_path):
             body_text = ""
 
         # --- EXTRACT BODY SNIPPET ---
-        body_snippet = str(body_text)[:500].replace('\n', ' ').strip()
+        # --- ISA III FIX: Store clean text snippet, not raw bytes with b'...' prefix ---
+        body_snippet = strip_quoted_text(body_text)[:500].replace('\n', ' ').strip()
 
         full_text = f"{subject} {body_text}"
         mentioned_tickets = set(ticket_pattern.findall(full_text))
 
-        sentiment = get_sentiment(body_text[:1000])
+        # --- ISA III FIX: Score only the sender's own words, not quoted text ---
+        cleaned_text = strip_quoted_text(body_text)
+        sentiment = get_sentiment(cleaned_text[:1000])
         date_str = message['date']
 
         for ticket in mentioned_tickets:

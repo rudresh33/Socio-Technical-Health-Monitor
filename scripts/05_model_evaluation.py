@@ -5,8 +5,11 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
-# Load the clean dataset (the 1000 human records)
-df = pd.read_csv("data/processed/isa3_enriched_dataset.csv")
+# --- ISA III FIX: Use ticket-level dataset (one row per ticket) ---
+# PROBLEM: The email-level dataset has multiple rows per ticket with
+# identical features, causing train-test leakage in cross-validation.
+# SOLUTION: Use the aggregated ticket-level dataset instead.
+df = pd.read_csv("data/processed/isa3_ticket_level.csv")
 
 # =====================================================================
 # THE "HONEST" FEATURE SET
@@ -15,9 +18,11 @@ df = pd.read_csv("data/processed/isa3_enriched_dataset.csv")
 # socio-technical communication signals.
 # =====================================================================
 safe_features = [
-    'email_count_per_ticket', 'subject_length',                      
-    'avg_sentiment', 'sentiment_variance', 'sentiment_trend',        
-    'priority_numeric'                         
+    'email_count_per_ticket', 'subject_length',
+    'avg_sentiment', 'sentiment_variance', 'sentiment_trend',
+    'priority_numeric',
+    'unique_senders',
+    # --- ISA III FIX: description_length moved to Model B (JIRA structural signal) ---
 ]
 
 X_model = df[safe_features]
@@ -30,7 +35,7 @@ dynamic_scale_pos_weight = neg / pos if pos > 0 else 1
 
 print("=" * 60)
 print(f"ISA III: HONEST MODEL EVALUATION PIPELINE")
-print(f"Training on {len(df)} Human Records")
+print(f"Training on {len(df)} Unique Tickets")
 print(f"Features: {len(safe_features)} (Pure Communication/Sentiment Signals)")
 print("=" * 60)
 
