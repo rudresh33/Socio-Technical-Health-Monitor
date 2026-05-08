@@ -3,7 +3,8 @@ import os
 
 # --- CONFIGURATION ---
 # To download a different year range, update this list.
-YEARS = [2023, 2024]
+# Change to
+YEARS = list(range(2018, 2025))  # 2015–2024
 
 OUTPUT_DIR = "data/raw/mbox_files"
 

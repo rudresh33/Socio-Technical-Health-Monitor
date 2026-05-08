@@ -1,301 +1,352 @@
+"""
+=============================================================================
+EDA VISUALISATIONS 
+=============================================================================
+Operates on the AGGREGATED ticket-level dataset (916 unique tickets).
+
+Produces six charts for Appendix B (descriptive statistics) and Appendix D
+(feature correlation):
+  B1 — Email volume distribution
+  B2 — Unique senders distribution
+  B3 — Sentiment by ticket status
+  B4 — Class balance across the four subprojects
+  B5 — Ticket count by year
+  D1 — Pairwise feature correlation heatmap
+
+Output: charts/*.png at 150 DPI.
+=============================================================================
+"""
+
+import os
+import warnings
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import seaborn as sns
-import numpy as np
-import os
 
-input_file = "data/processed/isa3_enriched_dataset.csv"
-output_dir = "visuals/eda_plots"
+# ---------------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------------
+TICKET_FILE = "data/processed/final_ticket_level.csv"
+EMAIL_FILE = "data/processed/isa3_enriched_dataset.csv"  # only for ticket → year mapping
+OUTPUT_DIR = "charts"
+DPI = 150
 
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+COLOR_RESOLVED = "#3b7dd8"   # blue
+COLOR_STALLED = "#e74c3c"    # red
+COLOR_NEUTRAL = "#7f8c8d"
 
-print("Loading data for visualization...")
-df = pd.read_csv(input_file, low_memory=False)
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
 
 sns.set_theme(style="whitegrid")
-plt.rcParams['font.family'] = 'DejaVu Sans'
+plt.rcParams["font.family"] = "DejaVu Sans"
 
 
-# =============================================================================
-# CHART 1: Sentiment Distribution by Task Priority (Fixed FutureWarning)
-# =============================================================================
-print("Generating Chart 1: Sentiment by Priority...")
-fig, ax = plt.subplots(figsize=(11, 6))
+# ---------------------------------------------------------------------------
+# AUDIT REPORT — what changed from the previous version of this script
+# ---------------------------------------------------------------------------
+print("=" * 70)
+print("AUDIT REPORT — Visualisation Script vs Current Dataset")
+print("=" * 70)
 
-priority_order = ['Blocker', 'Critical', 'Major', 'Minor', 'Trivial']
-plot_df1 = df[df['priority'].isin(priority_order)].copy()
-
-sns.boxplot(
-    x='priority', y='behavior_score',
-    hue='priority',
-    data=plot_df1, order=priority_order,
-    palette="coolwarm_r", legend=False, ax=ax
-)
-
-ax.axhline(0, color='grey', linestyle='--', linewidth=1, label='Neutral Baseline')
-ax.set_title('Developer Sentiment Distribution by Task Priority', fontsize=14, fontweight='bold', pad=15)
-ax.set_ylabel('Behavior Score  (-1.0 = Max Stress,  +1.0 = Max Positive)', fontsize=11)
-ax.set_xlabel('JIRA Ticket Priority', fontsize=11)
-
-# Annotation explaining the Blocker result
-ax.annotate(
-    'Blocker tickets show higher median sentiment:\nfast resolution generates relief in communication.',
-    xy=(0, 0.37), xytext=(1.5, 0.72),
-    fontsize=8.5, color='#555555',
-    arrowprops=dict(arrowstyle='->', color='#888888', lw=1.2),
-    bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', edgecolor='#cccccc')
-)
-
-# Median labels on each box
-medians = plot_df1.groupby('priority')['behavior_score'].median()
-for i, priority in enumerate(priority_order):
-    if priority in medians.index:
-        ax.text(i, medians[priority] + 0.03, f'{medians[priority]:.2f}',
-                ha='center', va='bottom', fontsize=9, color='black', fontweight='bold')
-
-ax.legend(loc='lower right', fontsize=9)
-plt.tight_layout()
-plt.savefig(f"{output_dir}/1_sentiment_by_priority.png", dpi=300, bbox_inches='tight')
-plt.close()
-print("  Chart 1 saved.")
-
-
-# =============================================================================
-# CHART 2: Stalled vs Resolved Sentiment (Fixed FutureWarning + Annotation)
-# =============================================================================
-print("Generating Chart 2: Stalled vs Active Tasks...")
-fig, ax = plt.subplots(figsize=(9, 6))
-
-df['Task Status'] = df['is_stalled'].map({1: 'Stalled / Open', 0: 'Resolved / Closed'})
-
-sns.violinplot(
-    x='Task Status', y='behavior_score',
-    hue='Task Status',
-    data=df, palette="muted",
-    inner="quartile", legend=False, ax=ax
-)
-
-ax.axhline(0, color='red', linestyle=':', linewidth=2, label='Neutral Baseline (0)')
-ax.set_title('Does Project Delay Impact Developer Emotion?', fontsize=14, fontweight='bold', pad=15)
-ax.set_ylabel('Behavior Score', fontsize=11)
-ax.set_xlabel('Task Status', fontsize=11)
-
-# Annotation explaining polarization
-ax.annotate(
-    'Stalled tasks show polarisation:\nhigher upper quartile (frustration releases)\nbut longer negative tail (sustained stress).',
-    xy=(1, -0.6), xytext=(1.12, -0.82),
-    fontsize=8.5, color='#555555',
-    bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', edgecolor='#cccccc')
-)
-
-ax.legend(loc='lower left', fontsize=9)
-plt.tight_layout()
-plt.savefig(f"{output_dir}/2_stalled_vs_active.png", dpi=300, bbox_inches='tight')
-plt.close()
-print("  Chart 2 saved.")
-
-
-# =============================================================================
-# CHART 3: Correlation Heatmap (Fixed - removed is_stalled, shows clean values)
-# =============================================================================
-print("Generating Chart 3: Correlation Heatmap...")
-
-# is_stalled removed because near-zero variance in this aggregated dataset
-# causes NaN correlations that break the visual — reported honestly in report
-numeric_cols = [
-    'behavior_score', 'days_to_resolve', 'subject_length',
-    'priority_numeric', 'sentiment_variance',
-    'email_volume_per_ticket', 'sentiment_trend'
+audit_messages = [
+    ("Input file",
+     "Old: data/processed/isa3_enriched_dataset.csv (email-level, ~7,051 rows)",
+     "New: data/processed/final_ticket_level.csv (916 unique tickets — correct unit of analysis)"),
+    ("Sentiment column",
+     "Old: 'behavior_score' (per-email VADER score, not present in ticket-level dataset)",
+     "New: 'avg_sentiment' (ticket-level mean, the variable used by the model)"),
+    ("Class labels",
+     "Old: 'Stalled / Open' vs 'Resolved / Closed'",
+     "New: 'Stalled' vs 'Resolved/Active' (matches dissertation terminology)"),
+    ("Output directory",
+     "Old: visuals/eda_plots/ (300 DPI)",
+     "New: charts/ (150 DPI per appendix spec)"),
+    ("Removed: Chart 1 'Sentiment by Priority' (boxplot)",
+     "Reason: not in dissertation appendix; superseded by B3 + B4.",
+     ""),
+    ("Removed: Chart 5 'Monthly Sentiment Trend'",
+     "Reason: relied on hard-coded Hadoop 3.4.1 release annotations and email_date,",
+     "        which is no longer present at the ticket level. Replaced by B5 (yearly counts)."),
+    ("Removed: Chart 7 'Task Status by Priority'",
+     "Reason: overlaps B4. Project-level class balance is the appendix-mandated cut.",
+     ""),
+    ("Replaced: Chart 6 'Email Volume Distribution' → B1 (using ticket-level data, not email-level dedupe)",
+     "", ""),
+    ("Replaced: Chart 3 'Correlation Heatmap' → D1 (now includes is_stalled and unique_senders)",
+     "", ""),
+    ("Added: B2 (unique senders distribution), B4 (class balance by project), B5 (tickets by year)",
+     "", ""),
 ]
-existing_cols = [col for col in numeric_cols if col in df.columns]
-corr_df = df[existing_cols].dropna()
-
-# Readable display names
-display_names = {
-    'behavior_score': 'Sentiment Score',
-    'days_to_resolve': 'Days to Resolve',
-    'subject_length': 'Subject Length',
-    'priority_numeric': 'Priority (Numeric)',
-    'sentiment_variance': 'Sentiment Variance',
-    'email_volume_per_ticket': 'Email Volume',
-    'sentiment_trend': 'Sentiment Trend'
-}
-corr_matrix = corr_df.rename(columns=display_names).corr()
-
-fig, ax = plt.subplots(figsize=(10, 8))
-mask = np.triu(np.ones_like(corr_matrix, dtype=bool), k=1)  # Show lower triangle only
-sns.heatmap(
-    corr_matrix, annot=True, fmt=".2f", cmap="coolwarm",
-    linewidths=0.5, square=True, ax=ax,
-    vmin=-0.5, vmax=0.5,
-    annot_kws={"size": 10}
-)
-ax.set_title('Feature Correlation Matrix\n(Values close to 0 indicate feature independence — desirable for ML)',
-             fontsize=12, fontweight='bold', pad=15)
-plt.xticks(rotation=35, ha='right', fontsize=10)
-plt.yticks(rotation=0, fontsize=10)
-plt.tight_layout()
-plt.savefig(f"{output_dir}/3_correlation_heatmap.png", dpi=300, bbox_inches='tight')
-plt.close()
-print("  Chart 3 saved.")
+for title, line1, line2 in audit_messages:
+    print(f"\n  • {title}")
+    if line1: print(f"    {line1}")
+    if line2: print(f"    {line2}")
+print("\n" + "=" * 70)
 
 
-# =============================================================================
-# CHART 5: Monthly Sentiment Trend (Fixed + Release event annotations)
-# =============================================================================
-print("Generating Chart 5: Monthly Sentiment Trend...")
+# ---------------------------------------------------------------------------
+# LOAD DATA
+# ---------------------------------------------------------------------------
+print("\nLoading ticket-level dataset...")
+df = pd.read_csv(TICKET_FILE, low_memory=False)
+print(f"  Shape: {df.shape}")
 
-df['email_month'] = pd.to_datetime(
-    df['email_date'], errors='coerce', utc=True
-).dt.to_period('M')
-monthly_sentiment = df.groupby('email_month')['behavior_score'].mean().reset_index()
-monthly_sentiment['email_month'] = monthly_sentiment['email_month'].astype(str)
+stalled_n = int(df["is_stalled"].sum())
+resolved_n = int((df["is_stalled"] == 0).sum())
+print(f"  Stalled : {stalled_n}")
+print(f"  Resolved/Active : {resolved_n}")
+print(f"  Class ratio : {resolved_n / max(stalled_n, 1):.1f} : 1\n")
 
-fig, ax = plt.subplots(figsize=(15, 6))
-ax.plot(
-    monthly_sentiment['email_month'],
-    monthly_sentiment['behavior_score'],
-    marker='o', linewidth=2.2, color='black', zorder=3
-)
-ax.axhline(0, color='red', linestyle='--', linewidth=1, label='Neutral Baseline', zorder=2)
+# Status text column for plotting
+df["Ticket Status"] = df["is_stalled"].map({0: "Resolved/Active", 1: "Stalled"})
 
-# Shade the release crunch period (Oct-Nov 2024 dip)
-crunch_months = ['2024-10', '2024-11']
-crunch_indices = [
-    i for i, m in enumerate(monthly_sentiment['email_month'].tolist())
-    if m in crunch_months
-]
-if len(crunch_indices) >= 2:
-    ax.axvspan(crunch_indices[0] - 0.5, crunch_indices[-1] + 0.5,
-               alpha=0.12, color='red', zorder=1)
-    ax.annotate(
-        'Release Crunch\n(Hadoop 3.4.1 RC)\nSentiment drops to 0.10',
-        xy=(crunch_indices[1], 0.10),
-        xytext=(crunch_indices[1] - 3.5, -0.05),
-        fontsize=9, color='#cc0000',
-        arrowprops=dict(arrowstyle='->', color='#cc0000', lw=1.2),
-        bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffe6e6', edgecolor='#cc0000')
-    )
 
-# Annotate the Dec 2024 recovery
-dec_idx = monthly_sentiment['email_month'].tolist().index('2024-12') \
-    if '2024-12' in monthly_sentiment['email_month'].tolist() else None
-if dec_idx:
-    ax.annotate(
-        'Post-release recovery\n+0.42',
-        xy=(dec_idx, monthly_sentiment.iloc[dec_idx]['behavior_score']),
-        xytext=(dec_idx - 2, 0.38),
-        fontsize=9, color='#006600',
-        arrowprops=dict(arrowstyle='->', color='#006600', lw=1.2),
-        bbox=dict(boxstyle='round,pad=0.3', facecolor='#e6ffe6', edgecolor='#006600')
-    )
+# ---------------------------------------------------------------------------
+# CHART B1 — Email Volume Distribution
+# ---------------------------------------------------------------------------
+print("Generating B1: Email Volume Distribution...")
+fig, ax = plt.subplots(figsize=(10, 5.5))
 
-ax.set_title('Average Developer Sentiment by Month (2023–2024)\nAnnotated with Key Release Events',
-             fontsize=13, fontweight='bold', pad=15)
-ax.set_ylabel('Average Behavior Score', fontsize=11)
-ax.set_xlabel('Month', fontsize=11)
-plt.xticks(rotation=45, ha='right', fontsize=9)
+vol = df["email_count_per_ticket"].dropna()
+vol_capped = vol.clip(upper=30)
+
+ax.hist(vol_capped, bins=30, color="steelblue", edgecolor="white", alpha=0.85)
+ax.axvline(vol.median(), color="red", linestyle="--", linewidth=1.8,
+           label=f"Median = {vol.median():.0f}")
+ax.axvline(vol.mean(), color="orange", linestyle=":", linewidth=1.8,
+           label=f"Mean = {vol.mean():.1f}")
+
+ax.set_title("B1 — Distribution of Email Volume per Ticket\n(916 unique tickets; long tail capped at 30 for display)",
+             fontsize=12, fontweight="bold", pad=12)
+ax.set_xlabel("Number of Emails Referencing the Ticket", fontsize=11)
+ax.set_ylabel("Number of Tickets", fontsize=11)
 ax.legend(fontsize=10)
-ax.set_ylim(-0.2, 0.55)
 plt.tight_layout()
-plt.savefig(f"{output_dir}/5_monthly_sentiment_trend.png", dpi=300, bbox_inches='tight')
+plt.savefig(f"{OUTPUT_DIR}/B1_email_volume_distribution.png", dpi=DPI, bbox_inches="tight")
 plt.close()
-print("  Chart 5 saved.")
+print(f"  Saved: {OUTPUT_DIR}/B1_email_volume_distribution.png")
 
 
-# =============================================================================
-# CHART 6 (NEW): Email Volume Distribution per Ticket
-# =============================================================================
-print("Generating Chart 6: Email Volume Distribution...")
+# ---------------------------------------------------------------------------
+# CHART B2 — Unique Senders Distribution
+# ---------------------------------------------------------------------------
+print("Generating B2: Unique Senders Distribution...")
 
-if 'email_volume_per_ticket' in df.columns:
-    fig, ax = plt.subplots(figsize=(10, 5))
+if "unique_senders" not in df.columns:
+    print("  SKIPPED — unique_senders column not present in dataset.")
+else:
+    fig, ax = plt.subplots(figsize=(10, 5.5))
 
-    volume_data = df.drop_duplicates(subset='ticket_key')['email_volume_per_ticket'].dropna()
-    # Cap at 30 for readability (outliers skew histogram badly)
-    volume_capped = volume_data.clip(upper=30)
+    senders = df["unique_senders"].dropna()
+    senders_capped = senders.clip(upper=15)
 
-    ax.hist(volume_capped, bins=30, color='steelblue', edgecolor='white', alpha=0.85)
-    ax.axvline(volume_data.median(), color='red', linestyle='--', linewidth=1.8,
-               label=f'Median: {volume_data.median():.0f} emails/ticket')
-    ax.axvline(volume_data.mean(), color='orange', linestyle=':', linewidth=1.8,
-               label=f'Mean: {volume_data.mean():.1f} emails/ticket')
+    ax.hist(senders_capped, bins=range(0, 17), color="#5b8def", edgecolor="white", alpha=0.85)
+    ax.axvline(senders.mean(), color="orange", linestyle=":", linewidth=1.8,
+               label=f"Mean = {senders.mean():.1f}")
 
-    ax.set_title('Distribution of Email Volume per JIRA Ticket\n(Communication Velocity Feature)',
-                 fontsize=13, fontweight='bold', pad=15)
-    ax.set_xlabel('Number of Emails Referencing Ticket (capped at 30 for display)', fontsize=11)
-    ax.set_ylabel('Number of Tickets', fontsize=11)
+    ax.set_title("B2 — Distribution of Unique Senders per Ticket\n(916 unique tickets; capped at 15 for display)",
+                 fontsize=12, fontweight="bold", pad=12)
+    ax.set_xlabel("Number of Distinct Senders", fontsize=11)
+    ax.set_ylabel("Number of Tickets", fontsize=11)
     ax.legend(fontsize=10)
+    plt.tight_layout()
+    plt.savefig(f"{OUTPUT_DIR}/B2_unique_senders_distribution.png", dpi=DPI, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {OUTPUT_DIR}/B2_unique_senders_distribution.png")
 
-    # Annotation
-    ax.annotate(
-        'High-volume tickets\nindicate contested or\nhigh-friction discussions',
-        xy=(20, ax.get_ylim()[1] * 0.6),
-        fontsize=9, color='#555555',
-        bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', edgecolor='#cccccc')
+
+# ---------------------------------------------------------------------------
+# CHART B3 — Sentiment by Ticket Status
+# ---------------------------------------------------------------------------
+print("Generating B3: Sentiment by Ticket Status...")
+fig, ax = plt.subplots(figsize=(8.5, 5.5))
+
+order = ["Resolved/Active", "Stalled"]
+palette = {"Resolved/Active": COLOR_RESOLVED, "Stalled": COLOR_STALLED}
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", FutureWarning)
+    sns.violinplot(
+        x="Ticket Status", y="avg_sentiment", hue="Ticket Status",
+        data=df, order=order, palette=palette, inner="quartile",
+        legend=False, ax=ax,
     )
 
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/6_email_volume_distribution.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    print("  Chart 6 saved.")
-else:
-    print("  Chart 6 skipped: email_volume_per_ticket column not found.")
+ax.axhline(0, color="black", linestyle=":", linewidth=1.2, label="Neutral baseline (0)")
+ax.set_title("B3 — Sentiment Distribution by Ticket Status\n(916 unique tickets)",
+             fontsize=12, fontweight="bold", pad=12)
+ax.set_ylabel("Average Sentiment Score (−1 = negative, +1 = positive)", fontsize=11)
+ax.set_xlabel("Ticket Status", fontsize=11)
+ax.legend(loc="lower right", fontsize=9)
+plt.tight_layout()
+plt.savefig(f"{OUTPUT_DIR}/B3_sentiment_by_status.png", dpi=DPI, bbox_inches="tight")
+plt.close()
+print(f"  Saved: {OUTPUT_DIR}/B3_sentiment_by_status.png")
 
 
-# =============================================================================
-# CHART 7 (NEW): Stalled vs Resolved Count by Priority (Class Distribution)
-# =============================================================================
-print("Generating Chart 7: Task Status by Priority...")
+# ---------------------------------------------------------------------------
+# CHART B4 — Class Balance Across Subprojects
+# ---------------------------------------------------------------------------
+print("Generating B4: Class Balance by Project...")
 
-priority_order = ['Blocker', 'Critical', 'Major', 'Minor', 'Trivial']
-plot_df7 = df[df['priority'].isin(priority_order)].copy()
+project_order = ["HADOOP", "HDFS", "YARN", "MAPREDUCE"]
+plot_df = df[df["project.key"].isin(project_order)].copy()
 
-status_counts = plot_df7.groupby(['priority', 'Task Status']).size().unstack(fill_value=0)
-
-# Ensure correct column order
-for col in ['Resolved / Closed', 'Stalled / Open']:
-    if col not in status_counts.columns:
-        status_counts[col] = 0
-status_counts = status_counts[['Resolved / Closed', 'Stalled / Open']]
-status_counts = status_counts.reindex(priority_order)
+counts = (plot_df.groupby(["project.key", "Ticket Status"])
+                 .size().unstack(fill_value=0))
+for c in ["Resolved/Active", "Stalled"]:
+    if c not in counts.columns:
+        counts[c] = 0
+counts = counts[["Resolved/Active", "Stalled"]].reindex(project_order, fill_value=0)
 
 fig, ax = plt.subplots(figsize=(10, 6))
-status_counts.plot(
-    kind='bar', stacked=True, ax=ax,
-    color=['steelblue', 'tomato'],
-    edgecolor='white', linewidth=0.5
-)
+counts.plot(kind="bar", stacked=True, ax=ax,
+            color=[COLOR_RESOLVED, COLOR_STALLED],
+            edgecolor="white", linewidth=0.8)
 
-ax.set_title('Task Status Distribution by Priority\n(Class Balance for ML Model)',
-             fontsize=13, fontweight='bold', pad=15)
-ax.set_xlabel('JIRA Ticket Priority', fontsize=11)
-ax.set_ylabel('Number of Records', fontsize=11)
-ax.set_xticklabels(priority_order, rotation=0, fontsize=10)
-ax.legend(['Resolved / Closed', 'Stalled / Open'], fontsize=10, loc='upper right')
+ax.set_title("B4 — Class Balance Across the Four Subprojects",
+             fontsize=12, fontweight="bold", pad=12)
+ax.set_xlabel("Subproject", fontsize=11)
+ax.set_ylabel("Number of Tickets", fontsize=11)
+ax.set_xticklabels(project_order, rotation=0, fontsize=10)
+ax.legend(["Resolved/Active", "Stalled"], fontsize=10, loc="upper right")
 
-# Add value labels on bars
+# Per-bar totals + class ratio above each bar
+for i, project in enumerate(project_order):
+    total = int(counts.loc[project].sum())
+    stalled = int(counts.loc[project, "Stalled"])
+    resolved = int(counts.loc[project, "Resolved/Active"])
+    ratio = resolved / max(stalled, 1)
+    ax.text(i, total + max(counts.values.sum(axis=1)) * 0.02,
+            f"n={total}\n{ratio:.1f}:1",
+            ha="center", va="bottom", fontsize=8.5, color="#333")
+
+# Stacked-segment value labels
 for container in ax.containers:
-    ax.bar_label(container, label_type='center', fontsize=8.5,
-                 color='white', fontweight='bold',
-                 fmt=lambda x: f'{int(x)}' if x > 30 else '')
-
-# Annotation on class imbalance
-total_stalled = status_counts['Stalled / Open'].sum()
-total_resolved = status_counts['Resolved / Closed'].sum()
-imbalance_ratio = total_resolved / max(total_stalled, 1)
-ax.text(0.98, 0.95,
-        f'Class Ratio\nResolved : Stalled\n≈ {imbalance_ratio:.1f} : 1\n(Imbalanced — requires\nclass_weight handling)',
-        transform=ax.transAxes, fontsize=8.5, va='top', ha='right',
-        bbox=dict(boxstyle='round,pad=0.4', facecolor='lightyellow', edgecolor='#cccccc'))
+    ax.bar_label(container, label_type="center", fontsize=8.5,
+                 color="white", fontweight="bold",
+                 fmt=lambda x: f"{int(x)}" if x > 8 else "")
 
 plt.tight_layout()
-plt.savefig(f"{output_dir}/7_task_status_by_priority.png", dpi=300, bbox_inches='tight')
+plt.savefig(f"{OUTPUT_DIR}/B4_class_balance_by_project.png", dpi=DPI, bbox_inches="tight")
 plt.close()
-print("  Chart 7 saved.")
+print(f"  Saved: {OUTPUT_DIR}/B4_class_balance_by_project.png")
 
 
-print(f"\nAll visuals saved successfully to the '{output_dir}' folder!")
-print("Charts generated: 1, 2, 3, 5, 6, 7")
+# ---------------------------------------------------------------------------
+# CHART B5 — Ticket Count by Year (2018–2024)
+# ---------------------------------------------------------------------------
+print("Generating B5: Tickets by Year...")
+
+year_df = None
+if os.path.exists(EMAIL_FILE):
+    try:
+        email_min = pd.read_csv(EMAIL_FILE, low_memory=False, usecols=["ticket_key", "created"])
+        email_min["created_dt"] = pd.to_datetime(email_min["created"], errors="coerce", utc=True)
+        ticket_year = (email_min.dropna(subset=["created_dt"])
+                                .groupby("ticket_key")["created_dt"].min()
+                                .dt.year.astype("Int64"))
+        year_df = df.merge(ticket_year.rename("year"),
+                           left_on="ticket_key", right_index=True, how="left")
+    except Exception as exc:
+        print(f"  WARNING: could not derive year from email-level dataset ({exc}). Skipping B5.")
+
+if year_df is None or year_df["year"].isna().all():
+    print("  SKIPPED — no usable 'created' year information available.")
+else:
+    yearly = (year_df.dropna(subset=["year"])
+                     .groupby(["year", "Ticket Status"]).size()
+                     .unstack(fill_value=0))
+    for c in ["Resolved/Active", "Stalled"]:
+        if c not in yearly.columns:
+            yearly[c] = 0
+    yearly = yearly[["Resolved/Active", "Stalled"]].sort_index()
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    yearly.plot(kind="bar", stacked=True, ax=ax,
+                color=[COLOR_RESOLVED, COLOR_STALLED],
+                edgecolor="white", linewidth=0.6)
+
+    ax.set_title("B5 — Ticket Count by Year (Project Coverage 2018–2024)",
+                 fontsize=12, fontweight="bold", pad=12)
+    ax.set_xlabel("Year (Earliest Mention in Mailing Lists)", fontsize=11)
+    ax.set_ylabel("Number of Unique Tickets", fontsize=11)
+    ax.set_xticklabels([int(y) for y in yearly.index], rotation=0, fontsize=10)
+    ax.legend(["Resolved/Active", "Stalled"], fontsize=10, loc="upper left")
+
+    # Total above each bar
+    totals = yearly.sum(axis=1)
+    for i, total in enumerate(totals.values):
+        ax.text(i, total + totals.max() * 0.02, f"{int(total)}",
+                ha="center", va="bottom", fontsize=8.5, color="#333")
+
+    plt.tight_layout()
+    plt.savefig(f"{OUTPUT_DIR}/B5_tickets_by_year.png", dpi=DPI, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved: {OUTPUT_DIR}/B5_tickets_by_year.png")
+
+
+# ---------------------------------------------------------------------------
+# CHART D1 — Correlation Heatmap
+# ---------------------------------------------------------------------------
+print("Generating D1: Correlation Heatmap...")
+
+corr_features = [
+    "email_count_per_ticket", "subject_length",
+    "avg_sentiment", "sentiment_variance", "sentiment_trend",
+    "priority_numeric", "unique_senders",
+    "description_length", "is_stalled",
+]
+existing = [c for c in corr_features if c in df.columns]
+missing = [c for c in corr_features if c not in df.columns]
+if missing:
+    print(f"  Note: missing columns excluded from heatmap — {missing}")
+
+display_names = {
+    "email_count_per_ticket": "Email Volume",
+    "subject_length": "Subject Length",
+    "avg_sentiment": "Avg Sentiment",
+    "sentiment_variance": "Sentiment Variance",
+    "sentiment_trend": "Sentiment Trend",
+    "priority_numeric": "Priority (numeric)",
+    "unique_senders": "Unique Senders",
+    "description_length": "Description Length",
+    "is_stalled": "Stalled (target)",
+}
+corr_matrix = df[existing].corr().rename(columns=display_names, index=display_names)
+
+fig, ax = plt.subplots(figsize=(10, 8))
+sns.heatmap(corr_matrix, annot=True, fmt=".2f",
+            cmap="RdBu_r", center=0, vmin=-1, vmax=1,
+            linewidths=0.5, square=True,
+            annot_kws={"size": 9}, ax=ax)
+ax.set_title("D1 — Pairwise Pearson Correlation Across Features\n(916 unique tickets)",
+             fontsize=12, fontweight="bold", pad=12)
+plt.xticks(rotation=35, ha="right", fontsize=9)
+plt.yticks(rotation=0, fontsize=9)
+plt.tight_layout()
+plt.savefig(f"{OUTPUT_DIR}/D1_correlation_heatmap.png", dpi=DPI, bbox_inches="tight")
+plt.close()
+print(f"  Saved: {OUTPUT_DIR}/D1_correlation_heatmap.png")
+
+
+# ---------------------------------------------------------------------------
+# VERIFICATION SUMMARY
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 70)
+print("VERIFICATION SUMMARY")
+print("=" * 70)
+
+generated = sorted(
+    f for f in os.listdir(OUTPUT_DIR)
+    if f.endswith(".png") and (f.startswith("B") or f.startswith("D"))
+)
+print(f"  Charts generated : {len(generated)}")
+for f in generated:
+    print(f"    - {OUTPUT_DIR}/{f}")
+print(f"  Dataset shape    : {df.shape} (expected ~916 rows)")
+print(f"  Stalled / Active : {stalled_n} / {resolved_n}")
+print(f"  Class ratio      : {resolved_n / max(stalled_n, 1):.1f} : 1")
+print("=" * 70)
+print("Done.")

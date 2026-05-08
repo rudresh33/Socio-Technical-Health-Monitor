@@ -5,8 +5,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
-# Load the clean dataset (the 1000 human records)
-df = pd.read_csv("data/processed/isa3_enriched_dataset.csv")
+# --- FIX: Use ticket-level dataset (one row per ticket) ---
+# PROBLEM: The email-level dataset has multiple rows per ticket with
+# identical features, causing train-test leakage in cross-validation.
+# SOLUTION: Use the aggregated ticket-level dataset instead.
+df = pd.read_csv("data/processed/final_ticket_level.csv")
+
 
 # =====================================================================
 # THE "HONEST" FEATURE SET
@@ -15,9 +19,11 @@ df = pd.read_csv("data/processed/isa3_enriched_dataset.csv")
 # socio-technical communication signals.
 # =====================================================================
 safe_features = [
-    'email_count_per_ticket', 'subject_length',                      
-    'avg_sentiment', 'sentiment_variance', 'sentiment_trend',        
-    'priority_numeric'                         
+    'email_count_per_ticket', 'subject_length',
+    'avg_sentiment', 'sentiment_variance', 'sentiment_trend',
+    'priority_numeric',
+    'unique_senders',
+    # --- FIX: description_length moved to Model B (JIRA structural signal) ---
 ]
 
 X_model = df[safe_features]
@@ -29,8 +35,8 @@ pos = (y == 1).sum()
 dynamic_scale_pos_weight = neg / pos if pos > 0 else 1
 
 print("=" * 60)
-print(f"ISA III: HONEST MODEL EVALUATION PIPELINE")
-print(f"Training on {len(df)} Human Records")
+print(f"HONEST MODEL EVALUATION PIPELINE")
+print(f"Training on {len(df)} Unique Tickets")
 print(f"Features: {len(safe_features)} (Pure Communication/Sentiment Signals)")
 print("=" * 60)
 
@@ -54,3 +60,22 @@ for name, model in models.items():
 
 print("\n" + "=" * 60)
 print(X_model.columns.tolist())  # should show exactly 7 features
+
+# ---FIX: Train and save final model for dashboard deployment ---
+# Cross-validation above was for evaluation only — no model was saved.
+# Here we train the best-performing model (Logistic Regression) on the
+# FULL dataset and save it so the Streamlit dashboard can load it.
+import joblib
+import os
+
+os.makedirs('models', exist_ok=True)
+
+final_model = LogisticRegression(class_weight='balanced', max_iter=2000)
+final_model.fit(X_model, y)
+
+joblib.dump(final_model, 'models/model_a_logistic.pkl')
+joblib.dump(safe_features, 'models/model_a_features.pkl')
+print(f"\nFinal model saved to models/model_a_logistic.pkl")
+print(f"Feature list saved to models/model_a_features.pkl")
+
+

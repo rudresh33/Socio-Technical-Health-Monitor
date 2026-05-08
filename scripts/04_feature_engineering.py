@@ -1,14 +1,14 @@
 """
 =============================================================================
 SOCIO-TECHNICAL HEALTH MONITOR
-Feature Engineering Pipeline — ISA III
+Feature Engineering Pipeline — SEA 
 =============================================================================
 
 WHAT THIS SCRIPT DOES:
   Reads the raw master_project_dataset.csv and produces a fully enriched
-  dataset with all features needed for ISA III model training.
+  dataset with all features needed for SEA model training.
 
-CHANGES FROM ISA II:
+CHANGES FROM SEA :
   - Fixed is_stalled definition (old new-code definition was wrong — see notes)
   - Added 14 new features across 5 categories
   - Dropped 100%-null customfield_12310921
@@ -56,7 +56,7 @@ PRIORITY_MAP = {
 # STEP 0 — LOAD
 # ============================================================================
 print("=" * 60)
-print("SOCIO-TECHNICAL HEALTH MONITOR — Feature Engineering ISA III")
+print("SOCIO-TECHNICAL HEALTH MONITOR — Feature Engineering SEA ")
 print("=" * 60)
 
 print("\n[Step 0] Loading master dataset...")
@@ -141,6 +141,14 @@ df['days_since_last_update'] = (
 )
 print(f"  days_since_last_update: mean={df['days_since_last_update'].mean():.0f} days")
 
+# --- FIX: New feature — description_length (ticket complexity signal) ---
+# Measures word count of JIRA ticket description. Known at creation, no leakage.
+# Correlation with is_stalled: +0.13. Longer descriptions = harder to close.
+df['description_length'] = df['description'].fillna('').astype(str).apply(
+    lambda x: len(x.split()) if x.strip() else 0
+)
+print(f"  description_length      : mean={df['description_length'].mean():.0f} words")
+
 
 # ============================================================================
 # STEP 5 — TARGET VARIABLE: is_stalled
@@ -148,7 +156,16 @@ print(f"  days_since_last_update: mean={df['days_since_last_update'].mean():.0f}
 print("\n[Step 5] Creating target variable: is_stalled...")
 
 # CORRECT DEFINITION: a ticket is stalled if it has NO resolution date.
-df['is_stalled'] = np.where(df['resolutiondate_dt'].isna(), 1, 0)
+# ---  FIX: Exclude "Patch Available" and "In Progress" from stalled ---
+# PROBLEM: Old definition labelled any ticket without a resolution date as stalled.
+# But "Patch Available" and "In Progress" tickets are actively being worked on.
+# SOLUTION: Only label tickets as stalled if they have no resolution date AND
+# their status is not an active-work status.
+active_work_statuses = {'Patch Available', 'In Progress'}
+df['is_stalled'] = np.where(
+    (df['resolutiondate_dt'].isna()) & (~df['status'].isin(active_work_statuses)),
+    1, 0
+)
 
 stalled_n   = df['is_stalled'].sum()
 stalled_pct = df['is_stalled'].mean() * 100
@@ -192,6 +209,22 @@ df = df.merge(email_counts, on='ticket_key', how='inner')
 
 # Feature: has_enough_emails (For sentiment_trend reliability)
 df['has_enough_emails'] = (df['email_count_per_ticket'] >= 2).astype(int)
+
+# --- FIX: Create alias so visualization script (07) can find this column ---
+df['email_volume_per_ticket'] = df['email_count_per_ticket']
+
+# --- FIX: New feature — unique_senders (team engagement signal) ---
+# Measures how many distinct people are discussing a ticket.
+# Correlation with is_stalled: -0.17 (strongest honest communication signal).
+# More participants = more momentum = less likely to stall.
+senders_per_ticket = (
+    df.groupby('ticket_key')['sender']
+      .nunique()
+      .reset_index()
+)
+senders_per_ticket.columns = ['ticket_key', 'unique_senders']
+df = df.merge(senders_per_ticket, on='ticket_key', how='left')
+print(f"  unique_senders          : mean={df['unique_senders'].mean():.1f} senders/ticket")
 
 print(f"  subject_length          : mean={df['subject_length'].mean():.1f} words")
 print(f"  email_count_per_ticket  : mean={df['email_count_per_ticket'].mean():.1f} (Human only)")
@@ -282,12 +315,14 @@ print("\n[Step 10] Final summary...")
 
 # The 7 Pure Communication & Sentiment Signals (No Leakage)
 HONEST_ML_FEATURES = [
-    'email_count_per_ticket', 
+    'email_count_per_ticket',
     'subject_length',
-    'avg_sentiment', 
-    'sentiment_variance', 
+    'avg_sentiment',
+    'sentiment_variance',
     'sentiment_trend',
-    'priority_numeric'
+    'priority_numeric',
+    'unique_senders',        # --- SEA FIX ---
+    'description_length',    # --- SEA FIX ---
 ]
 # Features identified as Target Leakage (Structural Proxies)
 LEAKING_FEATURES = [
@@ -316,7 +351,49 @@ for feat, corr in sorted(corr_data, key=lambda x: abs(x[1]), reverse=True):
     direction = '+' if corr > 0 else '-'
     print(f"    {feat:30s}: {corr:+.4f}  {direction}{bar}")
 
-# Save
+# --- FIX: Create ticket-level dataset for honest model training ---
+# PROBLEM: The full dataset has multiple rows per ticket (one per email).
+# All ML features except subject_length are identical across rows of the
+# same ticket, so training on all rows inflates sample size and causes
+# train-test leakage in cross-validation.
+# SOLUTION: Aggregate to one row per ticket for modelling.
+MODEL_OUTPUT_FILE = "data/processed/final_ticket_level.csv"
+
+agg_dict = {
+    'email_count_per_ticket': 'first',
+    'avg_sentiment': 'first',
+    'sentiment_variance': 'first',
+    'sentiment_trend': 'first',
+    'priority_numeric': 'first',
+    'subject_length': 'mean',
+    'unique_senders': 'first',        # --- SEA FIX ---
+    'description_length': 'first',    # --- SEA FIX ---
+    'is_stalled': 'first',
+    'has_enough_emails': 'first',
+    'email_volume_per_ticket': 'first',
+    'priority': 'first',
+    'status': 'first',
+    'project.key': 'first',
+    'issuetype.name': 'first',
+}
+# Add one-hot columns dynamically
+for col in df.columns:
+    if col.startswith('type_') or col.startswith('proj_'):
+        agg_dict[col] = 'first'
+
+df_ticket = df.groupby('ticket_key').agg(agg_dict).reset_index()
+
+ticket_stalled = df_ticket['is_stalled'].sum()
+ticket_active = (df_ticket['is_stalled'] == 0).sum()
+print(f"\n  TICKET-LEVEL DATASET (For Model Training):")
+print(f"    Unique tickets    : {len(df_ticket)}")
+print(f"    Stalled           : {ticket_stalled} ({ticket_stalled/len(df_ticket)*100:.1f}%)")
+print(f"    Active            : {ticket_active}")
+print(f"    Saved to          : {MODEL_OUTPUT_FILE}")
+
+df_ticket.to_csv(MODEL_OUTPUT_FILE, index=False)
+
+# Save full email-level dataset (for EDA and visualization)
 df.to_csv(OUTPUT_FILE, index=False)
 print(f"\n  Saved to: {OUTPUT_FILE}")
 print("\n" + "=" * 60)
